@@ -1,7 +1,33 @@
-﻿# Backdroply Infra
+# Backdroply Infra
 
-Deployment and environment assets.
+Infrastructure and deployment assets for local/dev/deploy profiles.
 
-## Run (local profile)
+## Scope
+
+- Docker Compose topology
+- Environment template (`.env.example`)
+- Infrastructure scripts under `infra/scripts`
+- Product docs under `docs/`
+
+## Key Scripts
+
+- `infra/scripts/dev-up.ps1`
+- `infra/scripts/dev-down.ps1`
+- `infra/scripts/split-repos.ps1`
+- `infra/scripts/push-split-repos.ps1`
+
+## Run Local Stack
+
+```bash
 docker compose --profile local up --build -d
+```
 
+## Stop
+
+```bash
+docker compose --profile local down
+```
+
+## Docs
+
+See `docs/` for architecture, security, legal, deployment, and mobile notes.
