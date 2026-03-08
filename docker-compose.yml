@@ -1,0 +1,176 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: bgremover-postgres
+    restart: unless-stopped
+    profiles: ["local", "dev", "deploy"]
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  engine:
+    build:
+      context: ./services/engine
+      dockerfile: Dockerfile
+    container_name: bgremover-engine
+    restart: unless-stopped
+    profiles: ["local", "dev", "deploy"]
+    environment:
+      ENGINE_PORT: ${ENGINE_PORT}
+      ENGINE_WORKDIR: ${ENGINE_WORKDIR}
+      ENGINE_ALLOWED_ORIGINS: ${ENGINE_ALLOWED_ORIGINS}
+      ENGINE_SHARED_TOKEN: ${ENGINE_SHARED_TOKEN}
+      ENGINE_MAX_IMAGE_MB: ${ENGINE_MAX_IMAGE_MB}
+      ENGINE_MAX_VIDEO_MB: ${ENGINE_MAX_VIDEO_MB}
+      ENGINE_MAX_VIDEO_SECONDS: ${ENGINE_MAX_VIDEO_SECONDS}
+      ENGINE_MAX_IMAGE_PIXELS: ${ENGINE_MAX_IMAGE_PIXELS}
+      ENGINE_MAX_VIDEO_PIXELS: ${ENGINE_MAX_VIDEO_PIXELS}
+      ENGINE_DEFAULT_QUALITY: ${ENGINE_DEFAULT_QUALITY}
+      ENGINE_ALLOW_COLOR_BG: ${ENGINE_ALLOW_COLOR_BG}
+      ENGINE_KEEP_JOBS_HOURS: ${ENGINE_KEEP_JOBS_HOURS}
+      ENGINE_WATERMARK_ENABLED: ${ENGINE_WATERMARK_ENABLED:-true}
+      ENGINE_WATERMARK_TEXT: ${ENGINE_WATERMARK_TEXT:-Made by Fatih}
+      U2NET_HOME: ${U2NET_HOME:-/app/data/u2net}
+      OMP_NUM_THREADS: ${OMP_NUM_THREADS:-1}
+      OMP_THREAD_LIMIT: ${OMP_THREAD_LIMIT:-1}
+      MALLOC_ARENA_MAX: ${MALLOC_ARENA_MAX:-2}
+    volumes:
+      - enginedata:/app/data
+    ports:
+      - "${ENGINE_PORT:-9000}:9000"
+
+  backend:
+    build:
+      context: ./services/backend
+      dockerfile: Dockerfile
+    container_name: bgremover-backend
+    restart: unless-stopped
+    profiles: ["local", "dev", "deploy"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      engine:
+        condition: service_started
+    environment:
+      SERVER_PORT: ${BACKEND_PORT}
+      SPRING_PROFILES_ACTIVE: docker
+      SERVER_FORWARD_HEADERS_STRATEGY: ${SERVER_FORWARD_HEADERS_STRATEGY:-framework}
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB}
+      SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER}
+      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD}
+      APP_JWT_SECRET: ${BACKEND_JWT_SECRET}
+      APP_JWT_EXPIRES_MIN: ${BACKEND_JWT_EXPIRES_MIN}
+      APP_ALLOWED_ORIGIN: ${BACKEND_ALLOWED_ORIGIN}
+      APP_GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID}
+      APP_ENGINE_BASE_URL: ${ENGINE_BASE_URL}
+      APP_ENGINE_SHARED_TOKEN: ${ENGINE_SHARED_TOKEN}
+      APP_DEFAULT_USER_TOKENS: ${DEFAULT_USER_TOKENS}
+      APP_TOKEN_COST_BALANCED: ${TOKEN_COST_BALANCED}
+      APP_TOKEN_COST_ULTRA: ${TOKEN_COST_ULTRA}
+      APP_MAIL_FROM: ${MAIL_FROM}
+      APP_STORAGE_ENABLED: ${STORAGE_ENABLED}
+      APP_STORAGE_PROVIDER: ${STORAGE_PROVIDER}
+      APP_STORAGE_BUCKET: ${STORAGE_BUCKET}
+      APP_STORAGE_REGION: ${STORAGE_REGION}
+      APP_STORAGE_ENDPOINT: ${STORAGE_ENDPOINT}
+      APP_STORAGE_ACCESS_KEY: ${STORAGE_ACCESS_KEY}
+      APP_STORAGE_SECRET_KEY: ${STORAGE_SECRET_KEY}
+      APP_STORAGE_PATH_STYLE: ${STORAGE_PATH_STYLE}
+      APP_STORAGE_PUBLIC_BASE_URL: ${STORAGE_PUBLIC_BASE_URL}
+      APP_STORAGE_SSE_ENABLED: ${STORAGE_SSE_ENABLED:-false}
+      APP_STORAGE_SSE_MODE: ${STORAGE_SSE_MODE:-AES256}
+      APP_STORAGE_SSE_KMS_KEY_ID: ${STORAGE_SSE_KMS_KEY_ID:-}
+      APP_PRIVACY_DELETION_PEPPER: ${PRIVACY_DELETION_PEPPER}
+      SPRING_MAIL_HOST: ${SMTP_HOST}
+      SPRING_MAIL_PORT: ${SMTP_PORT}
+      SPRING_MAIL_USERNAME: ${SMTP_USER}
+      SPRING_MAIL_PASSWORD: ${SMTP_PASS}
+      APP_PAYMENT_WEBHOOK_SECRET: ${PAYMENT_WEBHOOK_SECRET}
+      APP_PAYMENT_WEBHOOK_TOLERANCE_SEC: ${PAYMENT_WEBHOOK_TOLERANCE_SEC}
+      APP_PAYMENT_PROVIDER_NAME: ${PAYMENT_PROVIDER_NAME}
+      APP_PAYMENT_PROVIDER_BASE_URL: ${PAYMENT_PROVIDER_BASE_URL}
+      APP_PAYMENT_PROVIDER_API_KEY: ${PAYMENT_PROVIDER_API_KEY}
+      APP_PAYMENT_PROVIDER_SECRET_KEY: ${PAYMENT_PROVIDER_SECRET_KEY}
+      APP_PAYMENT_WEBHOOK_LOG_RETENTION_DAYS: ${PAYMENT_WEBHOOK_LOG_RETENTION_DAYS:-45}
+      APP_AUTH_COOKIE_SECURE: ${AUTH_COOKIE_SECURE:-true}
+      APP_AUTH_COOKIE_SECURE_AUTO: ${AUTH_COOKIE_SECURE_AUTO:-true}
+      APP_AUTH_COOKIE_SAME_SITE: ${AUTH_COOKIE_SAME_SITE:-Lax}
+      APP_AUTH_COOKIE_DOMAIN: ${AUTH_COOKIE_DOMAIN:-}
+      APP_RATE_LIMIT_AUTH_PER_MINUTE: ${RATE_LIMIT_AUTH_PER_MINUTE:-24}
+      APP_RATE_LIMIT_PROCESS_PER_MINUTE: ${RATE_LIMIT_PROCESS_PER_MINUTE:-16}
+      APP_RATE_LIMIT_FRAME_EXTRACT_PER_MINUTE: ${RATE_LIMIT_FRAME_EXTRACT_PER_MINUTE:-36}
+      APP_RATE_LIMIT_WEBHOOK_PER_MINUTE: ${RATE_LIMIT_WEBHOOK_PER_MINUTE:-120}
+      APP_UPLOAD_MAX_IMAGE_MB: ${APP_UPLOAD_MAX_IMAGE_MB:-${ENGINE_MAX_IMAGE_MB}}
+      APP_UPLOAD_MAX_VIDEO_MB: ${APP_UPLOAD_MAX_VIDEO_MB:-${ENGINE_MAX_VIDEO_MB}}
+      APP_UPLOAD_SNIFF_BYTES: ${APP_UPLOAD_SNIFF_BYTES:-4096}
+      APP_UPLOAD_STRICT_MAGIC: ${APP_UPLOAD_STRICT_MAGIC:-true}
+    ports:
+      - "${BACKEND_PORT:-8080}:8080"
+
+  minio:
+    image: minio/minio:latest
+    container_name: bgremover-minio
+    restart: unless-stopped
+    profiles: ["local", "dev", "deploy"]
+    environment:
+      MINIO_ROOT_USER: ${STORAGE_ACCESS_KEY}
+      MINIO_ROOT_PASSWORD: ${STORAGE_SECRET_KEY}
+    command: server /data --console-address ":9001"
+    volumes:
+      - miniodata:/data
+    ports:
+      - "9010:9000"
+      - "9011:9001"
+
+  web-dev:
+    build:
+      context: ./apps/web
+      dockerfile: Dockerfile
+      target: dev
+      args:
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL}
+        VITE_GOOGLE_CLIENT_ID: ${VITE_GOOGLE_CLIENT_ID}
+        VITE_APP_NAME: ${VITE_APP_NAME}
+    container_name: bgremover-web-dev
+    restart: unless-stopped
+    profiles: ["local", "dev"]
+    depends_on:
+      - backend
+    environment:
+      VITE_API_BASE_URL: ${VITE_API_BASE_URL}
+      VITE_GOOGLE_CLIENT_ID: ${VITE_GOOGLE_CLIENT_ID}
+      VITE_APP_NAME: ${VITE_APP_NAME}
+    ports:
+      - "${WEB_PORT:-5173}:5173"
+
+  web-prod:
+    build:
+      context: ./apps/web
+      dockerfile: Dockerfile
+      target: prod
+      args:
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL}
+        VITE_GOOGLE_CLIENT_ID: ${VITE_GOOGLE_CLIENT_ID}
+        VITE_APP_NAME: ${VITE_APP_NAME}
+    container_name: bgremover-web-prod
+    restart: unless-stopped
+    profiles: ["deploy"]
+    depends_on:
+      - backend
+    ports:
+      - "${WEB_PORT:-8081}:80"
+
+volumes:
+  pgdata:
+  enginedata:
+  miniodata:
