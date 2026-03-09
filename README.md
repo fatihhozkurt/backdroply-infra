@@ -9,6 +9,9 @@ Infrastructure and deployment assets for local/dev/deploy profiles.
 - Infrastructure scripts under `infra/scripts`
 - Product docs under `docs/`
 
+> Compose build context note: this repo expects sibling repos at:
+> `../backdroply-web`, `../backdroply-backend`, `../backdroply-engine`
+
 ## Key Scripts
 
 - `infra/scripts/dev-up.ps1`

@@ -20,7 +20,7 @@ services:
 
   engine:
     build:
-      context: ./services/engine
+      context: ../backdroply-engine
       dockerfile: Dockerfile
     container_name: bgremover-engine
     restart: unless-stopped
@@ -51,7 +51,7 @@ services:
 
   backend:
     build:
-      context: ./services/backend
+      context: ../backdroply-backend
       dockerfile: Dockerfile
     container_name: bgremover-backend
     restart: unless-stopped
@@ -134,7 +134,7 @@ services:
 
   web-dev:
     build:
-      context: ./apps/web
+      context: ../backdroply-web
       dockerfile: Dockerfile
       target: dev
       args:
@@ -155,7 +155,7 @@ services:
 
   web-prod:
     build:
-      context: ./apps/web
+      context: ../backdroply-web
       dockerfile: Dockerfile
       target: prod
       args:
