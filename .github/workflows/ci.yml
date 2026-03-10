@@ -1,0 +1,34 @@
+name: Infra CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  compose-validate:
+    name: Compose Validation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate docker compose graph
+        run: docker compose --env-file .env.example --profile local config
+
+  docs-check:
+    name: Documentation Presence Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify critical docs exist
+        run: |
+          test -f docs/DEPLOY.md
+          test -f docs/SECURITY.md
+          test -f docs/LEGAL_TR.md
+          test -f docs/MOBILE.md

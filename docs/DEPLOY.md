@@ -32,5 +32,20 @@ docker compose --profile deploy up --build -d
 - `APP_*` degiskenleri backend ayarlari
 - `ENGINE_*` degiskenleri AI motor limitleri
 - `VITE_*` degiskenleri frontend build/runtime
+- `APP_STRICT_STARTUP=true` ile backend production fail-fast config kontrolu yapar
 - Eszamanli islem limiti backend tarafinda sabit: kullanici basina ayni anda max 1 image + 1 video
 - `STORAGE_ENABLED=true` yaparsan `My Media` ciktilari MinIO/S3'e kalici kaydedilir
+
+## Go-Live Gate
+
+Deploy oncesi:
+
+```powershell
+pwsh ./infra/scripts/go-live-preflight.ps1 -EnvFile .env.production
+```
+
+Opsiyonel smoke:
+
+```powershell
+pwsh ./infra/scripts/go-live-preflight.ps1 -EnvFile .env.production -RunSmoke
+```

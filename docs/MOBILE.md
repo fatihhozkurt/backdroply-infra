@@ -22,6 +22,24 @@
    - subscription/consumable bilgi metinleri
 6. Crash + analytics + abuse detection ekleyin.
 
+## Launch Test Matrix (Minimum)
+
+1. Android physical device (13/14):
+   - first launch
+   - Google login
+   - image process
+   - video process
+   - output download
+   - account deletion
+2. iOS physical device (17+):
+   - same flow as Android
+3. Failure scenarios:
+   - invalid/expired token
+   - backend unreachable
+   - upload cancellation
+
+Gate: launch only if all matrix checks pass without crash.
+
 ## Dagitim
 
 - iOS: Apple Developer Program + bundle id + signing

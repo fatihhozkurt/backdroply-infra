@@ -20,6 +20,8 @@
 - [x] Download akisinda streaming transfer
 - [x] Object storage icin opsiyonel SSE (AES256/KMS)
 - [x] SMTP opsiyonel; yoksa bloklamaz
+- [x] Strict startup gate (critical secret/OAuth/payment config fail-fast)
+- [x] Multi-repo CI security gates (tests + dependency scan + image scan)
 
 ## Ek Oneriler (Production)
 
