@@ -16,6 +16,18 @@ Optional full smoke run:
 pwsh ./infra/scripts/go-live-preflight.ps1 -EnvFile .env.production -RunSmoke
 ```
 
+Optional full E2E flow run (recommended before production cut):
+
+```powershell
+pwsh ./infra/scripts/go-live-preflight.ps1 -EnvFile .env.production -RunFullE2E
+```
+
+Or run only E2E flow:
+
+```powershell
+pwsh ./infra/scripts/full-e2e.ps1 -EnvFile .env.production
+```
+
 The script fails (`exit 1`) when critical config is unsafe:
 
 - weak/placeholder JWT secret

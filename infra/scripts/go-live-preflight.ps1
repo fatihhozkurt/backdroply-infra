@@ -1,6 +1,7 @@
 param(
     [string]$EnvFile = ".env.example",
     [switch]$RunSmoke,
+    [switch]$RunFullE2E,
     [switch]$KeepRunning
 )
 
@@ -193,6 +194,18 @@ if ($errors.Count -eq 0 -and $RunSmoke.IsPresent) {
             Write-Host "Smoke stack stopped."
         }
     }
+}
+
+if ($errors.Count -eq 0 -and $RunFullE2E.IsPresent) {
+    $fullE2eScript = Join-Path $PSScriptRoot "full-e2e.ps1"
+    if (!(Test-Path $fullE2eScript)) {
+        throw "full-e2e script not found: $fullE2eScript"
+    }
+    $e2eArgs = @("-EnvFile", $EnvFile)
+    if ($KeepRunning.IsPresent) {
+        $e2eArgs += "-KeepRunning"
+    }
+    & $fullE2eScript @e2eArgs
 }
 
 if ($errors.Count -gt 0) {

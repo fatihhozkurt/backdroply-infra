@@ -22,6 +22,14 @@
 - [x] SMTP opsiyonel; yoksa bloklamaz
 - [x] Strict startup gate (critical secret/OAuth/payment config fail-fast)
 - [x] Multi-repo CI security gates (tests + dependency scan + image scan)
+- [x] Full-stack E2E security probe (`infra/scripts/full-e2e.ps1`)
+- [x] Engine image base hardened to `python:3.12-slim-trixie`
+
+## Image Scan Durumu (2026-03-11)
+
+- `web-prod`: Trivy OS scan HIGH/CRITICAL = 0
+- `backend`: Trivy OS scan HIGH/CRITICAL = 0
+- `engine`: Trivy OS scan HIGH=2, CRITICAL=0 (CVE-2026-0861, glibc; upstream fix bekleniyor)
 
 ## Ek Oneriler (Production)
 

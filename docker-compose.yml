@@ -48,6 +48,18 @@ services:
       - enginedata:/app/data
     ports:
       - "${ENGINE_PORT:-9000}:9000"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request,sys; sys.exit(0) if urllib.request.urlopen('http://localhost:9000/health', timeout=3).status == 200 else sys.exit(1)"
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
 
   backend:
     build:
@@ -60,7 +72,7 @@ services:
       postgres:
         condition: service_healthy
       engine:
-        condition: service_started
+        condition: service_healthy
     environment:
       SERVER_PORT: ${BACKEND_PORT}
       SPRING_PROFILES_ACTIVE: docker
@@ -75,6 +87,7 @@ services:
       APP_GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID}
       APP_ENGINE_BASE_URL: ${ENGINE_BASE_URL}
       APP_ENGINE_SHARED_TOKEN: ${ENGINE_SHARED_TOKEN}
+      APP_ENGINE_PROCESS_TIMEOUT_SEC: ${APP_ENGINE_PROCESS_TIMEOUT_SEC:-900}
       APP_DEFAULT_USER_TOKENS: ${DEFAULT_USER_TOKENS}
       APP_TOKEN_COST_BALANCED: ${TOKEN_COST_BALANCED}
       APP_TOKEN_COST_ULTRA: ${TOKEN_COST_ULTRA}
@@ -87,6 +100,7 @@ services:
       APP_STORAGE_ACCESS_KEY: ${STORAGE_ACCESS_KEY}
       APP_STORAGE_SECRET_KEY: ${STORAGE_SECRET_KEY}
       APP_STORAGE_PATH_STYLE: ${STORAGE_PATH_STYLE}
+      APP_STORAGE_AUTO_CREATE_BUCKET: ${STORAGE_AUTO_CREATE_BUCKET:-true}
       APP_STORAGE_PUBLIC_BASE_URL: ${STORAGE_PUBLIC_BASE_URL}
       APP_STORAGE_SSE_ENABLED: ${STORAGE_SSE_ENABLED:-false}
       APP_STORAGE_SSE_MODE: ${STORAGE_SSE_MODE:-AES256}
@@ -117,6 +131,12 @@ services:
       APP_UPLOAD_STRICT_MAGIC: ${APP_UPLOAD_STRICT_MAGIC:-true}
     ports:
       - "${BACKEND_PORT:-8080}:8080"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/actuator/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
 
   minio:
     image: minio/minio:latest
@@ -146,7 +166,8 @@ services:
     restart: unless-stopped
     profiles: ["local", "dev"]
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
     environment:
       VITE_API_BASE_URL: ${VITE_API_BASE_URL}
       VITE_GOOGLE_CLIENT_ID: ${VITE_GOOGLE_CLIENT_ID}
@@ -167,7 +188,8 @@ services:
     restart: unless-stopped
     profiles: ["deploy"]
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
     ports:
       - "${WEB_PORT:-8081}:80"
 

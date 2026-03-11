@@ -49,3 +49,15 @@ Opsiyonel smoke:
 ```powershell
 pwsh ./infra/scripts/go-live-preflight.ps1 -EnvFile .env.production -RunSmoke
 ```
+
+Opsiyonel full E2E:
+
+```powershell
+pwsh ./infra/scripts/go-live-preflight.ps1 -EnvFile .env.production -RunFullE2E
+```
+
+Windows PowerShell (pwsh yoksa):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\\infra\\scripts\\full-e2e.ps1 -EnvFile .env.production
+```
