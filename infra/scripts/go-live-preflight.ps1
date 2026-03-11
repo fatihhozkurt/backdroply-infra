@@ -201,11 +201,11 @@ if ($errors.Count -eq 0 -and $RunFullE2E.IsPresent) {
     if (!(Test-Path $fullE2eScript)) {
         throw "full-e2e script not found: $fullE2eScript"
     }
-    $e2eArgs = @("-EnvFile", $EnvFile)
     if ($KeepRunning.IsPresent) {
-        $e2eArgs += "-KeepRunning"
+        & $fullE2eScript -EnvFile $EnvFile -KeepRunning
+    } else {
+        & $fullE2eScript -EnvFile $EnvFile
     }
-    & $fullE2eScript @e2eArgs
 }
 
 if ($errors.Count -gt 0) {
