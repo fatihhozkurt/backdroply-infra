@@ -2,6 +2,9 @@ param(
     [string]$EnvFile = ".env.example",
     [switch]$RunSmoke,
     [switch]$RunFullE2E,
+    [switch]$RunBenchmark,
+    [switch]$RunAutoTune,
+    [switch]$SkipBenchmark,
     [switch]$KeepRunning
 )
 
@@ -40,6 +43,24 @@ function Read-EnvMap([string]$Path) {
         $map[$key] = $val
     }
     return $map
+}
+
+function Compose-Args([hashtable]$EnvMap, [string]$RepoRoot) {
+    $args = @("-f", (Join-Path $RepoRoot "docker-compose.yml"))
+    $enableGpu = $false
+    if ($EnvMap.ContainsKey("ENGINE_ENABLE_GPU")) {
+        $enableGpu = $EnvMap["ENGINE_ENABLE_GPU"].Trim().ToLowerInvariant() -eq "true"
+    }
+    if ($enableGpu) {
+        $gpuFile = Join-Path $RepoRoot "docker-compose.gpu.yml"
+        if (Test-Path $gpuFile) {
+            $args += @("-f", $gpuFile)
+            Write-Host "[INFO] GPU compose override enabled: $gpuFile" -ForegroundColor Cyan
+        } else {
+            Write-WarnLine "ENGINE_ENABLE_GPU=true but docker-compose.gpu.yml not found."
+        }
+    }
+    return $args
 }
 
 function Require-Value([hashtable]$EnvMap, [string]$Key, [System.Collections.Generic.List[string]]$Errors) {
@@ -105,10 +126,10 @@ function Verify-MobileGoogleIds([System.Collections.Generic.List[string]]$Warnin
     }
 }
 
-function Invoke-Smoke([string]$EnvFilePath) {
+function Invoke-Smoke([string]$EnvFilePath, [string[]]$ComposeArgs) {
     Write-Host ""
     Write-Host "Running docker compose smoke..." -ForegroundColor Cyan
-    docker compose --env-file $EnvFilePath --profile local up -d --build | Out-Host
+    docker compose @ComposeArgs --env-file $EnvFilePath --profile local up -d --build | Out-Host
     Start-Sleep -Seconds 10
 
     $apiHealth = curl.exe -sS http://localhost:8080/actuator/health
@@ -139,6 +160,7 @@ Write-Host "Using env file: $envPath"
 $errors = New-Object 'System.Collections.Generic.List[string]'
 $warnings = New-Object 'System.Collections.Generic.List[string]'
 $envMap = Read-EnvMap $envPath
+$composeArgs = Compose-Args $envMap $root
 
 # Core security + OAuth + payment checks
 Require-Value $envMap "BACKEND_JWT_SECRET" $errors
@@ -187,10 +209,10 @@ if ($warnings.Count -gt 0) {
 
 if ($errors.Count -eq 0 -and $RunSmoke.IsPresent) {
     try {
-        Invoke-Smoke $envPath
+        Invoke-Smoke $envPath $composeArgs
     } finally {
         if (!$KeepRunning.IsPresent) {
-            docker compose --env-file $envPath --profile local down | Out-Host
+            docker compose @composeArgs --env-file $envPath --profile local down | Out-Host
             Write-Host "Smoke stack stopped."
         }
     }
@@ -201,10 +223,39 @@ if ($errors.Count -eq 0 -and $RunFullE2E.IsPresent) {
     if (!(Test-Path $fullE2eScript)) {
         throw "full-e2e script not found: $fullE2eScript"
     }
+    $fullE2eArgs = @("-EnvFile", $EnvFile)
+    if (!$SkipBenchmark.IsPresent) {
+        $fullE2eArgs += "-RunBenchmark"
+    }
     if ($KeepRunning.IsPresent) {
-        & $fullE2eScript -EnvFile $EnvFile -KeepRunning
+        $fullE2eArgs += "-KeepRunning"
+        & $fullE2eScript @fullE2eArgs
     } else {
-        & $fullE2eScript -EnvFile $EnvFile
+        & $fullE2eScript @fullE2eArgs
+    }
+}
+
+if ($errors.Count -eq 0 -and !$RunFullE2E.IsPresent -and $RunBenchmark.IsPresent) {
+    $benchmarkScript = Join-Path $PSScriptRoot "load-benchmark.ps1"
+    if (!(Test-Path $benchmarkScript)) {
+        throw "load-benchmark script not found: $benchmarkScript"
+    }
+    if ($KeepRunning.IsPresent) {
+        & $benchmarkScript -EnvFile $EnvFile -KeepRunning
+    } else {
+        & $benchmarkScript -EnvFile $EnvFile
+    }
+}
+
+if ($errors.Count -eq 0 -and $RunAutoTune.IsPresent) {
+    $autoTuneScript = Join-Path $PSScriptRoot "auto-tune.ps1"
+    if (!(Test-Path $autoTuneScript)) {
+        throw "auto-tune script not found: $autoTuneScript"
+    }
+    if ($KeepRunning.IsPresent) {
+        & $autoTuneScript -EnvFile $EnvFile -KeepRunning
+    } else {
+        & $autoTuneScript -EnvFile $EnvFile
     }
 }
 

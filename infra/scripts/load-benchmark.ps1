@@ -1,6 +1,5 @@
 param(
     [string]$EnvFile = "tmp-integration/.env.e2e",
-    [switch]$RunBenchmark,
     [switch]$KeepRunning
 )
 
@@ -73,6 +72,8 @@ $enginePort = if ($envMap.ContainsKey("ENGINE_PORT")) { $envMap["ENGINE_PORT"] }
 $tmpDir = Join-Path $repoRoot "tmp-integration"
 $reportDir = Join-Path $tmpDir "reports"
 New-Item -ItemType Directory -Path $reportDir -Force | Out-Null
+$stamp = Get-Date -Format "yyyyMMdd-HHmmss"
+$reportPath = Join-Path $reportDir "benchmark-$stamp.json"
 
 Push-Location $repoRoot
 try {
@@ -89,33 +90,19 @@ try {
     }
     Write-Ok "Engine is healthy."
 
-    $probePath = Join-Path $PSScriptRoot "e2e_full_probe.py"
+    $probePath = Join-Path $PSScriptRoot "benchmark_probe.py"
     if (!(Test-Path $probePath)) {
-        throw "Probe script not found: $probePath"
+        throw "Benchmark probe script not found: $probePath"
     }
-    Write-Info "Running full E2E probe..."
-    python $probePath --env-file $envPath --tmp-dir $tmpDir
-    if ($LASTEXITCODE -ne 0) {
-        throw "E2E probe failed with exit code $LASTEXITCODE"
-    }
-    Write-Ok "Full E2E probe passed."
 
-    if ($RunBenchmark.IsPresent) {
-        $benchmarkPath = Join-Path $PSScriptRoot "benchmark_probe.py"
-        if (!(Test-Path $benchmarkPath)) {
-            throw "benchmark probe script not found: $benchmarkPath"
-        }
-        $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
-        $reportPath = Join-Path $reportDir "benchmark-$stamp.json"
-        Write-Info "Running benchmark + go/no-go probe..."
-        python $benchmarkPath --env-file $envPath --tmp-dir $tmpDir --output-json $reportPath
-        if ($LASTEXITCODE -eq 2) {
-            throw "Benchmark completed with NO_GO result. Report: $reportPath"
-        }
-        if ($LASTEXITCODE -ne 0) {
-            throw "Benchmark probe failed with exit code $LASTEXITCODE"
-        }
+    Write-Info "Running benchmark + go/no-go checks..."
+    python $probePath --env-file $envPath --tmp-dir $tmpDir --output-json $reportPath
+    if ($LASTEXITCODE -eq 0) {
         Write-Ok "Benchmark GO. Report: $reportPath"
+    } elseif ($LASTEXITCODE -eq 2) {
+        throw "Benchmark completed but go/no-go result is NO_GO. Report: $reportPath"
+    } else {
+        throw "Benchmark probe failed with exit code $LASTEXITCODE. Report: $reportPath"
     }
 } finally {
     if (!$KeepRunning.IsPresent) {

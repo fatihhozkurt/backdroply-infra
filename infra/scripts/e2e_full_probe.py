@@ -7,7 +7,6 @@ import hashlib
 import hmac
 import json
 import subprocess
-import threading
 import time
 import uuid
 from pathlib import Path
@@ -79,6 +78,11 @@ def run_psql_insert_user(pg_user: str, pg_db: str) -> tuple[int, str, str]:
     if user_id is None:
         raise RuntimeError(f"User seed returned unexpected id: {output}")
     return user_id, email, full_name
+
+
+def run_cmd(cmd: list[str]) -> tuple[int, str, str]:
+    proc = subprocess.run(cmd, text=True, capture_output=True, check=False)
+    return proc.returncode, proc.stdout.strip(), proc.stderr.strip()
 
 
 def curl_with_output(args: list[str], output_path: Path) -> tuple[int, str]:
@@ -164,6 +168,115 @@ def assert_status(name: str, code: int, expected: int) -> None:
         raise AssertionError(f"{name} expected HTTP {expected}, got {code}")
 
 
+def wait_http_contains(url: str, expected_fragment: str, retries: int = 60, sleep_sec: float = 2.0) -> bool:
+    for _ in range(retries):
+        out = Path.cwd() / f".tmp-http-{uuid.uuid4().hex}.txt"
+        try:
+            code, body = curl_with_output(["-X", "GET", url], out)
+            if code == 200 and expected_fragment in body:
+                return True
+        except Exception:
+            pass
+        finally:
+            out.unlink(missing_ok=True)
+        time.sleep(sleep_sec)
+    return False
+
+
+def token_balance(base: str, tmp_dir: Path, token: str) -> int:
+    code, me = curl_json(tmp_dir, "GET", f"{base}/users/me", token=token)
+    assert_status("get token balance /users/me", code, 200)
+    if "tokens" in me:
+        return int(me["tokens"])
+    if "tokenBalance" in me:
+        return int(me["tokenBalance"])
+    raise AssertionError("/users/me payload missing tokens")
+
+
+def wait_for_terminal_status(
+    base: str,
+    tmp_dir: Path,
+    token: str,
+    job_id: int,
+    timeout_sec: int = 240,
+    poll_sec: float = 1.0,
+) -> tuple[dict, list[str]]:
+    deadline = time.time() + timeout_sec
+    observed: list[str] = []
+    last_status = ""
+
+    while time.time() < deadline:
+        code, payload = curl_json(tmp_dir, "GET", f"{base}/media/jobs/{job_id}/status", token=token)
+        assert_status(f"poll job status ({job_id})", code, 200)
+        status = str(payload.get("status", "")).strip().lower()
+        if status and status != last_status:
+            observed.append(status)
+            last_status = status
+        if status in ("success", "failed"):
+            return payload, observed
+        time.sleep(poll_sec)
+
+    raise TimeoutError(f"Job {job_id} did not reach terminal status in {timeout_sec}s. Observed={observed}")
+
+
+def submit_and_wait(
+    base: str,
+    tmp_dir: Path,
+    token: str,
+    media_type: str,
+    file_path: Path,
+    fields: dict[str, str],
+    expect_async: bool,
+    expect_success: bool,
+    timeout_sec: int = 240,
+) -> tuple[int, dict, list[str]]:
+    if media_type not in ("image", "video"):
+        raise ValueError("media_type must be image or video")
+    code, submit_payload = curl_multipart(tmp_dir, f"{base}/media/{media_type}", file_path, token, fields=fields)
+    assert_status(f"submit {media_type}", code, 200)
+    if "jobId" not in submit_payload:
+        raise AssertionError(f"submit {media_type} payload missing jobId")
+
+    job_id = int(submit_payload["jobId"])
+    initial_status = str(submit_payload.get("status", "")).strip().lower()
+    observed = [initial_status] if initial_status else []
+
+    if expect_async and initial_status not in ("queued", "processing", "success"):
+        raise AssertionError(f"Expected async submit status queued/processing/success, got: {initial_status!r}")
+
+    if initial_status in ("success", "failed"):
+        final_payload = submit_payload
+    else:
+        final_payload, polled_statuses = wait_for_terminal_status(
+            base=base,
+            tmp_dir=tmp_dir,
+            token=token,
+            job_id=job_id,
+            timeout_sec=timeout_sec,
+            poll_sec=1.0,
+        )
+        for st in polled_statuses:
+            if st not in observed:
+                observed.append(st)
+
+    final_status = str(final_payload.get("status", "")).lower()
+    if expect_success and final_status != "success":
+        raise AssertionError(f"{media_type} job expected success, got {final_status}. Payload={final_payload}")
+    if not expect_success and final_status != "failed":
+        raise AssertionError(f"{media_type} job expected failed, got {final_status}. Payload={final_payload}")
+    return job_id, final_payload, observed
+
+
+def assert_downloadable(base: str, tmp_dir: Path, token: str, job_payload: dict, target_path: Path, label: str) -> None:
+    download_rel = job_payload.get("downloadUrl")
+    if not download_rel:
+        raise AssertionError(f"{label} downloadUrl missing")
+    download_url = f"http://localhost:{base.split(':')[-1]}{download_rel}" if download_rel.startswith("/") else str(download_rel)
+    code = curl_download(tmp_dir, download_url, token, target_path)
+    if code != 200 or not target_path.exists() or target_path.stat().st_size <= 0:
+        raise AssertionError(f"{label} download failed (HTTP {code})")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Backdroply full E2E API probe")
     parser.add_argument("--env-file", required=True, type=Path)
@@ -177,6 +290,8 @@ def main() -> int:
     pg_user = env_map.get("POSTGRES_USER", "bgadmin")
     pg_db = env_map.get("POSTGRES_DB", "bgremover")
     storage_enabled = env_map.get("STORAGE_ENABLED", "false").lower() == "true"
+    queue_enabled = env_map.get("QUEUE_ENABLED", "false").lower() == "true"
+    expect_async = queue_enabled and storage_enabled
 
     if len(jwt_secret) < 32:
         raise RuntimeError("BACKEND_JWT_SECRET is too short for E2E probe.")
@@ -189,7 +304,9 @@ def main() -> int:
         raise RuntimeError(f"Sample files are missing under {tmp_dir}")
 
     base = f"http://localhost:{backend_port}/api/v1"
+    base_origin = f"http://localhost:{backend_port}"
     print(f"[e2e] Base API: {base}")
+    print(f"[e2e] Async queue expected: {expect_async}")
 
     code, _ = curl_json(tmp_dir, "GET", f"{base}/users/me")
     assert_status("unauth /users/me", code, 401)
@@ -205,35 +322,43 @@ def main() -> int:
         raise AssertionError("Authenticated /users/me returned unexpected user id")
     print("[e2e] Authenticated profile fetch OK")
 
-    code, image_job = curl_multipart(
-        tmp_dir,
-        f"{base}/media/image",
-        image_path,
-        token,
+    image_job_id, image_job, image_observed = submit_and_wait(
+        base=base,
+        tmp_dir=tmp_dir,
+        token=token,
+        media_type="image",
+        file_path=image_path,
         fields={"quality": "balanced", "bgColor": "transparent"},
+        expect_async=expect_async,
+        expect_success=True,
+        timeout_sec=180,
     )
-    assert_status("process image", code, 200)
-    image_job_id = int(image_job["jobId"])
-    image_download_url = f"http://localhost:{backend_port}{image_job['downloadUrl']}"
+    if expect_async and not any(st in ("queued", "processing") for st in image_observed):
+        raise AssertionError(f"Image async lifecycle not observed. statuses={image_observed}")
     image_out = tmp_dir / "e2e-image-output.png"
-    if curl_download(tmp_dir, image_download_url, token, image_out) != 200 or image_out.stat().st_size == 0:
+    image_download_url = f"{base_origin}{image_job['downloadUrl']}"
+    if curl_download(tmp_dir, image_download_url, token, image_out) != 200 or image_out.stat().st_size <= 0:
         raise AssertionError("Image output download failed")
-    print(f"[e2e] Image processing OK (jobId={image_job_id})")
+    print(f"[e2e] Image processing OK (jobId={image_job_id}, statuses={image_observed})")
 
-    code, video_job = curl_multipart(
-        tmp_dir,
-        f"{base}/media/video",
-        video_path,
-        token,
+    video_job_id, video_job, video_observed = submit_and_wait(
+        base=base,
+        tmp_dir=tmp_dir,
+        token=token,
+        media_type="video",
+        file_path=video_path,
         fields={"quality": "balanced", "bgColor": "transparent"},
+        expect_async=expect_async,
+        expect_success=True,
+        timeout_sec=360,
     )
-    assert_status("process video", code, 200)
-    video_job_id = int(video_job["jobId"])
-    video_download_url = f"http://localhost:{backend_port}{video_job['downloadUrl']}"
+    if expect_async and not any(st in ("queued", "processing") for st in video_observed):
+        raise AssertionError(f"Video async lifecycle not observed. statuses={video_observed}")
     video_out = tmp_dir / "e2e-video-output.webm"
-    if curl_download(tmp_dir, video_download_url, token, video_out) != 200 or video_out.stat().st_size == 0:
+    video_download_url = f"{base_origin}{video_job['downloadUrl']}"
+    if curl_download(tmp_dir, video_download_url, token, video_out) != 200 or video_out.stat().st_size <= 0:
         raise AssertionError("Video output download failed")
-    print(f"[e2e] Video processing OK (jobId={video_job_id})")
+    print(f"[e2e] Video processing OK (jobId={video_job_id}, statuses={video_observed})")
 
     code, frame_payload = curl_multipart(
         tmp_dir,
@@ -261,51 +386,55 @@ def main() -> int:
     assert_status("malicious payload block", code, 400)
     print("[e2e] Malicious payload block OK")
 
-    concurrent_ok = False
-    for attempt in range(1, 5):
-        statuses: list[int] = []
-        lock = threading.Lock()
-        barrier = threading.Barrier(3)
+    if expect_async:
+        before_balance = token_balance(base, tmp_dir, token)
+        print(f"[e2e] Refund probe start token balance={before_balance}")
 
-        def worker() -> None:
-            barrier.wait()
-            code_local, _ = curl_multipart(
-                tmp_dir,
-                f"{base}/media/video",
-                video_path,
-                token,
+        rc, _, err = run_cmd(["docker", "stop", "bgremover-engine"])
+        if rc != 0:
+            raise RuntimeError(f"Failed to stop engine for refund probe: {err}")
+        try:
+            failed_job_id, failed_job, failed_observed = submit_and_wait(
+                base=base,
+                tmp_dir=tmp_dir,
+                token=token,
+                media_type="image",
+                file_path=image_path,
                 fields={"quality": "ultra", "bgColor": "transparent"},
+                expect_async=True,
+                expect_success=False,
+                timeout_sec=180,
             )
-            with lock:
-                statuses.append(code_local)
+            print(f"[e2e] Failure path observed (jobId={failed_job_id}, statuses={failed_observed})")
+            if failed_job.get("errorMessage") in (None, ""):
+                raise AssertionError("Failed job must contain errorMessage")
+        finally:
+            rc, _, err = run_cmd(["docker", "start", "bgremover-engine"])
+            if rc != 0:
+                raise RuntimeError(f"Failed to restart engine after refund probe: {err}")
+            if not wait_http_contains("http://localhost:9000/health", '"status":"ok"', retries=80, sleep_sec=2.0):
+                raise RuntimeError("Engine did not become healthy after restart.")
 
-        t1 = threading.Thread(target=worker, daemon=True)
-        t2 = threading.Thread(target=worker, daemon=True)
-        t1.start()
-        t2.start()
-        barrier.wait()
-        t1.join()
-        t2.join()
-        if 429 in statuses:
-            concurrent_ok = True
-            print(f"[e2e] Concurrency limit OK (attempt={attempt}, statuses={statuses})")
-            break
-        print(f"[e2e] Concurrency probe retry (attempt={attempt}, statuses={statuses})")
-        time.sleep(0.5)
-
-    if not concurrent_ok:
-        raise AssertionError("Concurrency limit was not observed during parallel video processing.")
+        after_balance = token_balance(base, tmp_dir, token)
+        if after_balance != before_balance:
+            raise AssertionError(
+                f"Token refund failed after processing failure. before={before_balance}, after={after_balance}"
+            )
+        print("[e2e] Token refund on failure OK")
 
     if storage_enabled:
         for idx in range(11):
-            code, _ = curl_multipart(
-                tmp_dir,
-                f"{base}/media/image",
-                image_path,
-                token,
+            _, _, _ = submit_and_wait(
+                base=base,
+                tmp_dir=tmp_dir,
+                token=token,
+                media_type="image",
+                file_path=image_path,
                 fields={"quality": "balanced", "bgColor": "transparent"},
+                expect_async=expect_async,
+                expect_success=True,
+                timeout_sec=180,
             )
-            assert_status(f"my-media fill iteration {idx + 1}", code, 200)
         code, my_media = curl_json(tmp_dir, "GET", f"{base}/media/my-media", token=token)
         assert_status("get my-media", code, 200)
         if not isinstance(my_media, list):

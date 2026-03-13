@@ -22,6 +22,20 @@ Optional full E2E flow run (recommended before production cut):
 pwsh ./infra/scripts/go-live-preflight.ps1 -EnvFile .env.production -RunFullE2E
 ```
 
+`-RunFullE2E` includes benchmark + automatic GO/NO_GO checks by default.
+
+Benchmark only:
+
+```powershell
+pwsh ./infra/scripts/go-live-preflight.ps1 -EnvFile .env.production -RunBenchmark
+```
+
+Auto-tune profiles and generate `.env.autotuned`:
+
+```powershell
+pwsh ./infra/scripts/go-live-preflight.ps1 -EnvFile .env.production -RunAutoTune
+```
+
 Or run only E2E flow:
 
 ```powershell
@@ -90,12 +104,30 @@ Crash criteria:
 - zero crash during Google sign-in
 - zero crash during upload and download flows
 
-## 6) Final Sign-Off Criteria
+## 6) TR Compliance Contact and Data Rights Checklist
+
+Before launch:
+
+1. Footer contains permanent links: Contact, Terms, Privacy, Cookies.
+2. `/contact` page is public and contains:
+   - support email
+   - support form with ticket id
+   - optional phone/KEP
+   - response SLA text (for example 48 hours)
+3. Purchase/plan UI shows support/refund/cancellation contact line.
+4. Privacy policy contains explicit data subject channel (KVKK) and deletion request path.
+5. Mobile store metadata includes support email + account/data deletion path.
+6. Legal note is aligned with your business status:
+   - if no registered company yet, avoid claiming official invoice issuance
+   - when company is ready, integrate compliant e-invoice/e-archive flow
+
+## 7) Final Sign-Off Criteria
 
 Launch is allowed only if all items below are true:
 
 1. preflight script passes with production env file
-2. all repository CI gates pass on `main`
-3. OAuth and payment live tests pass
-4. mobile matrix passes on physical devices
-5. legal/privacy/cookie pages are published and linked
+2. full E2E + benchmark gate returns GO
+3. all repository CI gates pass on `main`
+4. OAuth and payment live tests pass
+5. mobile matrix passes on physical devices
+6. legal/privacy/cookie/contact pages are published and linked

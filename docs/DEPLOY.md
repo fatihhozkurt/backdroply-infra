@@ -27,6 +27,19 @@ docker compose --profile deploy up --build -d
 - Backend ve engine container icinde calisir.
 - Production'da TLS terminasyonu icin ters proxy (Nginx/Traefik/Cloud LB) ekleyin.
 
+## Production-Like Local
+
+```powershell
+pwsh ./infra/scripts/prod-like-local-up.ps1 -EnvFile .env.production.local
+```
+
+Bu komut deploy profilini localde ayaga kaldirir (web-prod + backend + queue + storage).
+Istege bagli olarak:
+
+```powershell
+pwsh ./infra/scripts/prod-like-local-up.ps1 -EnvFile .env.production.local -RunE2E -RunBenchmark
+```
+
 ## .env Konfig Notlari
 
 - `APP_*` degiskenleri backend ayarlari
@@ -56,8 +69,28 @@ Opsiyonel full E2E:
 pwsh ./infra/scripts/go-live-preflight.ps1 -EnvFile .env.production -RunFullE2E
 ```
 
+`-RunFullE2E` artik benchmark + go/no-go kalite/perf kapilarini da calistirir.
+
+Sadece benchmark/go-no-go:
+
+```powershell
+pwsh ./infra/scripts/go-live-preflight.ps1 -EnvFile .env.production -RunBenchmark
+```
+
+Otomatik tuning (profil taramasi + `.env.autotuned`):
+
+```powershell
+pwsh ./infra/scripts/go-live-preflight.ps1 -EnvFile .env.production -RunAutoTune
+```
+
 Windows PowerShell (pwsh yoksa):
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\\infra\\scripts\\full-e2e.ps1 -EnvFile .env.production
 ```
+
+## Dagitik Mimari Plani
+
+Auth + queue + k8s karar dokumani:
+
+`docs/ARCHITECTURE_SCALE_PLAN.md`
