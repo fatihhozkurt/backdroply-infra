@@ -42,11 +42,10 @@ def issue_jwt(secret: str, user_id: int, email: str, name: str, expires_min: int
     return f"{signing_input}.{b64url(signature)}"
 
 
-def run_psql_insert_user(pg_user: str, pg_db: str) -> tuple[int, str, str]:
+def run_psql_insert_user(pg_user: str, pg_db: str, full_name: str = "E2E Probe User") -> tuple[int, str, str]:
     unique = uuid.uuid4().hex[:12]
     google_sub = f"e2e-sub-{unique}"
     email = f"e2e-{unique}@backdroply.local"
-    full_name = "E2E Probe User"
     sql = (
         "INSERT INTO users (google_sub, email, full_name, language, token_balance, created_at, updated_at, last_login_at) "
         f"VALUES ('{google_sub}', '{email}', '{full_name}', 'en', 120, NOW(), NOW(), NOW()) RETURNING id;"
@@ -78,6 +77,27 @@ def run_psql_insert_user(pg_user: str, pg_db: str) -> tuple[int, str, str]:
     if user_id is None:
         raise RuntimeError(f"User seed returned unexpected id: {output}")
     return user_id, email, full_name
+
+
+def run_psql_exec(pg_user: str, pg_db: str, sql: str) -> str:
+    cmd = [
+        "docker",
+        "exec",
+        "bgremover-postgres",
+        "psql",
+        "-U",
+        pg_user,
+        "-d",
+        pg_db,
+        "-t",
+        "-A",
+        "-c",
+        sql,
+    ]
+    proc = subprocess.run(cmd, text=True, capture_output=True, check=False)
+    if proc.returncode != 0:
+        raise RuntimeError(f"psql command failed: {proc.stderr.strip()}")
+    return proc.stdout.strip()
 
 
 def run_cmd(cmd: list[str]) -> tuple[int, str, str]:
@@ -312,9 +332,13 @@ def main() -> int:
     assert_status("unauth /users/me", code, 401)
     print("[e2e] Unauthorized guard OK")
 
-    user_id, email, full_name = run_psql_insert_user(pg_user, pg_db)
+    user_id, email, full_name = run_psql_insert_user(pg_user, pg_db, "E2E Probe User A")
     token = issue_jwt(jwt_secret, user_id, email, full_name, jwt_expires_min)
     print(f"[e2e] Seeded user id={user_id}")
+
+    user2_id, email2, full_name2 = run_psql_insert_user(pg_user, pg_db, "E2E Probe User B")
+    token2 = issue_jwt(jwt_secret, user2_id, email2, full_name2, jwt_expires_min)
+    print(f"[e2e] Seeded secondary user id={user2_id}")
 
     code, me = curl_json(tmp_dir, "GET", f"{base}/users/me", token=token)
     assert_status("auth /users/me", code, 200)
@@ -359,6 +383,22 @@ def main() -> int:
     if curl_download(tmp_dir, video_download_url, token, video_out) != 200 or video_out.stat().st_size <= 0:
         raise AssertionError("Video output download failed")
     print(f"[e2e] Video processing OK (jobId={video_job_id}, statuses={video_observed})")
+
+    code, _ = curl_json(tmp_dir, "GET", f"{base}/media/jobs/{image_job_id}/status", token=token2)
+    if code not in (403, 404):
+        raise AssertionError(f"IDOR status guard failed. expected 403/404, got {code}")
+    code = curl_download(tmp_dir, f"{base_origin}/api/v1/media/jobs/{image_job_id}/download", token2, tmp_dir / "e2e-idor.bin")
+    if code not in (403, 404):
+        raise AssertionError(f"IDOR download guard failed. expected 403/404, got {code}")
+    print("[e2e] IDOR guards OK")
+
+    code, _ = curl_json(tmp_dir, "POST", f"{base}/auth/logout", token=token2)
+    assert_status("logout secondary user", code, 200)
+    code, _ = curl_json(tmp_dir, "GET", f"{base}/users/me", token=token2)
+    if code != 401:
+        raise AssertionError(f"Logout token revocation failed, expected 401 got {code}")
+    run_psql_exec(pg_user, pg_db, f"DELETE FROM users WHERE id = {user2_id};")
+    print("[e2e] Logout token revocation OK")
 
     code, frame_payload = curl_multipart(
         tmp_dir,

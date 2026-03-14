@@ -43,6 +43,7 @@ pwsh ./infra/scripts/prod-like-local-up.ps1 -EnvFile .env.production.local -RunE
 ## .env Konfig Notlari
 
 - `APP_*` degiskenleri backend ayarlari
+- `PRIVACY_PII_KEY` DB'de PII alanlarinin sifrelenmesi icin gerekir (production'da zorunlu)
 - `ENGINE_*` degiskenleri AI motor limitleri
 - `VITE_*` degiskenleri frontend build/runtime
 - `APP_STRICT_STARTUP=true` ile backend production fail-fast config kontrolu yapar

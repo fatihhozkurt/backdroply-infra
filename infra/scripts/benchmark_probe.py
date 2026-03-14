@@ -233,22 +233,39 @@ def run_phase(
     sample_errors: list[str] = []
     success = 0
     start_wall = time.perf_counter()
+    retry_on_429_max = 8
+    retry_backoff_sec = 0.35
 
     def worker(idx: int) -> tuple[int, float, int | None, str | None]:
         token = users[idx % len(users)].token
         started = time.perf_counter()
-        try:
-            code, payload = curl_multipart(
-                tmp_dir=tmp_dir,
-                url=f"{base_url}{endpoint}",
-                file_path=sample_file,
-                token=token,
-                timeout_sec=timeout_sec,
-                fields={"quality": quality, "bgColor": bg_color},
-            )
-        except Exception as ex:
-            elapsed_ms = (time.perf_counter() - started) * 1000.0
-            return 599, elapsed_ms, None, str(ex)
+        code = 599
+        payload: dict = {}
+        attempt = 0
+        while True:
+            try:
+                code, payload = curl_multipart(
+                    tmp_dir=tmp_dir,
+                    url=f"{base_url}{endpoint}",
+                    file_path=sample_file,
+                    token=token,
+                    timeout_sec=timeout_sec,
+                    fields={"quality": quality, "bgColor": bg_color},
+                )
+            except Exception as ex:
+                elapsed_ms = (time.perf_counter() - started) * 1000.0
+                return 599, elapsed_ms, None, str(ex)
+
+            if code != 429:
+                break
+            if attempt >= retry_on_429_max:
+                break
+            if (time.perf_counter() - started) >= timeout_sec:
+                break
+            sleep_for = min(retry_backoff_sec * (2 ** attempt), 2.5)
+            time.sleep(sleep_for)
+            attempt += 1
+
         elapsed_ms = (time.perf_counter() - started) * 1000.0
         qc_value = None
         err = None

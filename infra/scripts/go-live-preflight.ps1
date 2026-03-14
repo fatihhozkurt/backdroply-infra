@@ -126,25 +126,29 @@ function Verify-MobileGoogleIds([System.Collections.Generic.List[string]]$Warnin
     }
 }
 
-function Invoke-Smoke([string]$EnvFilePath, [string[]]$ComposeArgs) {
+function Invoke-Smoke([string]$EnvFilePath, [string[]]$ComposeArgs, [hashtable]$EnvMap) {
     Write-Host ""
     Write-Host "Running docker compose smoke..." -ForegroundColor Cyan
     docker compose @ComposeArgs --env-file $EnvFilePath --profile local up -d --build | Out-Host
     Start-Sleep -Seconds 10
 
-    $apiHealth = curl.exe -sS http://localhost:8080/actuator/health
+    $backendPort = if ($EnvMap.ContainsKey("BACKEND_PORT")) { $EnvMap["BACKEND_PORT"] } else { "8080" }
+    $enginePort = if ($EnvMap.ContainsKey("ENGINE_PORT")) { $EnvMap["ENGINE_PORT"] } else { "9000" }
+    $webPort = if ($EnvMap.ContainsKey("WEB_PORT")) { $EnvMap["WEB_PORT"] } else { "5173" }
+
+    $apiHealth = curl.exe -sS "http://localhost:$backendPort/actuator/health"
     if (!$apiHealth.Contains('"status":"UP"')) {
         throw "Backend health check failed: $apiHealth"
     }
     Write-Ok "Backend health check passed."
 
-    $engineHealth = curl.exe -sS http://localhost:9000/health
+    $engineHealth = curl.exe -sS "http://localhost:$enginePort/health"
     if (!$engineHealth.Contains('"status":"ok"')) {
         throw "Engine health check failed: $engineHealth"
     }
     Write-Ok "Engine health check passed."
 
-    $webCode = curl.exe -sS -o NUL -w "%{http_code}" http://localhost:5173
+    $webCode = curl.exe -sS -o NUL -w "%{http_code}" "http://localhost:$webPort"
     if ($webCode -ne "200") {
         throw "Web health check failed with status: $webCode"
     }
@@ -209,7 +213,7 @@ if ($warnings.Count -gt 0) {
 
 if ($errors.Count -eq 0 -and $RunSmoke.IsPresent) {
     try {
-        Invoke-Smoke $envPath $composeArgs
+        Invoke-Smoke $envPath $composeArgs $envMap
     } finally {
         if (!$KeepRunning.IsPresent) {
             docker compose @composeArgs --env-file $envPath --profile local down | Out-Host
@@ -223,15 +227,14 @@ if ($errors.Count -eq 0 -and $RunFullE2E.IsPresent) {
     if (!(Test-Path $fullE2eScript)) {
         throw "full-e2e script not found: $fullE2eScript"
     }
-    $fullE2eArgs = @("-EnvFile", $EnvFile)
-    if (!$SkipBenchmark.IsPresent) {
-        $fullE2eArgs += "-RunBenchmark"
-    }
-    if ($KeepRunning.IsPresent) {
-        $fullE2eArgs += "-KeepRunning"
-        & $fullE2eScript @fullE2eArgs
+    if (!$SkipBenchmark.IsPresent -and $KeepRunning.IsPresent) {
+        & $fullE2eScript -EnvFile $EnvFile -RunBenchmark -KeepRunning
+    } elseif (!$SkipBenchmark.IsPresent -and !$KeepRunning.IsPresent) {
+        & $fullE2eScript -EnvFile $EnvFile -RunBenchmark
+    } elseif ($SkipBenchmark.IsPresent -and $KeepRunning.IsPresent) {
+        & $fullE2eScript -EnvFile $EnvFile -KeepRunning
     } else {
-        & $fullE2eScript @fullE2eArgs
+        & $fullE2eScript -EnvFile $EnvFile
     }
 }
 
