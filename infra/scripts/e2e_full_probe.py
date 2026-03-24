@@ -10,6 +10,7 @@ import subprocess
 import time
 import uuid
 from pathlib import Path
+from urllib.parse import urlsplit
 
 
 def read_env_map(path: Path) -> dict[str, str]:
@@ -105,8 +106,19 @@ def run_cmd(cmd: list[str]) -> tuple[int, str, str]:
     return proc.returncode, proc.stdout.strip(), proc.stderr.strip()
 
 
-def curl_with_output(args: list[str], output_path: Path) -> tuple[int, str]:
-    cmd = ["curl.exe", "-sS", "-o", str(output_path), "-w", "%{http_code}"] + args
+def curl_with_output(args: list[str], output_path: Path, timeout_sec: int = 45) -> tuple[int, str]:
+    cmd = [
+        "curl.exe",
+        "-sS",
+        "--connect-timeout",
+        "8",
+        "--max-time",
+        str(timeout_sec),
+        "-o",
+        str(output_path),
+        "-w",
+        "%{http_code}",
+    ] + args
     proc = subprocess.run(cmd, text=True, capture_output=True, check=False)
     if proc.returncode != 0:
         raise RuntimeError(f"curl failed: {' '.join(cmd)}\n{proc.stderr.strip()}")
@@ -126,6 +138,7 @@ def curl_json(
     url: str,
     token: str | None = None,
     body: dict | None = None,
+    timeout_sec: int = 45,
 ) -> tuple[int, dict]:
     out = tmp_dir / f"resp-{uuid.uuid4().hex}.json"
     args = ["-X", method, url, "-H", "Accept: application/json"]
@@ -133,7 +146,7 @@ def curl_json(
         args += ["-H", f"Authorization: Bearer {token}"]
     if body is not None:
         args += ["-H", "Content-Type: application/json", "--data", json.dumps(body, separators=(",", ":"))]
-    code, raw = curl_with_output(args, out)
+    code, raw = curl_with_output(args, out, timeout_sec=timeout_sec)
     out.unlink(missing_ok=True)
     if not raw:
         return code, {}
@@ -150,6 +163,7 @@ def curl_multipart(
     token: str,
     fields: dict[str, str] | None = None,
     force_file_meta: str | None = None,
+    timeout_sec: int = 180,
 ) -> tuple[int, dict]:
     out = tmp_dir / f"resp-{uuid.uuid4().hex}.json"
     args = ["-X", "POST", url, "-H", "Accept: application/json", "-H", f"Authorization: Bearer {token}"]
@@ -159,7 +173,7 @@ def curl_multipart(
         args += ["-F", f"file=@{file_path.as_posix()}"]
     for key, value in (fields or {}).items():
         args += ["-F", f"{key}={value}"]
-    code, raw = curl_with_output(args, out)
+    code, raw = curl_with_output(args, out, timeout_sec=timeout_sec)
     out.unlink(missing_ok=True)
     if not raw:
         return code, {}
@@ -169,7 +183,7 @@ def curl_multipart(
         return code, {"_raw": raw}
 
 
-def curl_download(tmp_dir: Path, url: str, token: str, target_path: Path) -> int:
+def curl_download(tmp_dir: Path, url: str, token: str, target_path: Path, timeout_sec: int = 180) -> int:
     target_path.parent.mkdir(parents=True, exist_ok=True)
     args = [
         "-L",
@@ -179,7 +193,7 @@ def curl_download(tmp_dir: Path, url: str, token: str, target_path: Path) -> int
         "-H",
         f"Authorization: Bearer {token}",
     ]
-    code, _ = curl_with_output(args, target_path)
+    code, _ = curl_with_output(args, target_path, timeout_sec=timeout_sec)
     return code
 
 
@@ -301,10 +315,14 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Backdroply full E2E API probe")
     parser.add_argument("--env-file", required=True, type=Path)
     parser.add_argument("--tmp-dir", required=True, type=Path)
+    parser.add_argument("--base-url", default="", help="Optional API base URL, e.g. http://localhost:8081/api/v1")
+    parser.add_argument("--request-timeout-sec", type=int, default=45)
+    parser.add_argument("--upload-timeout-sec", type=int, default=180)
     args = parser.parse_args()
 
     env_map = read_env_map(args.env_file)
     backend_port = int(env_map.get("BACKEND_PORT", "8080"))
+    web_port = int(env_map.get("WEB_PORT", "8081"))
     jwt_secret = env_map.get("BACKEND_JWT_SECRET", "")
     jwt_expires_min = int(env_map.get("BACKEND_JWT_EXPIRES_MIN", "120"))
     pg_user = env_map.get("POSTGRES_USER", "bgadmin")
@@ -323,12 +341,27 @@ def main() -> int:
     if not image_path.exists() or not video_path.exists():
         raise RuntimeError(f"Sample files are missing under {tmp_dir}")
 
-    base = f"http://localhost:{backend_port}/api/v1"
-    base_origin = f"http://localhost:{backend_port}"
+    base_backend = f"http://localhost:{backend_port}/api/v1"
+    base_web = f"http://localhost:{web_port}/api/v1"
+    if args.base_url.strip():
+        base = args.base_url.strip().rstrip("/")
+    else:
+        selected = None
+        for candidate in (base_backend, base_web):
+            try:
+                code, _ = curl_json(tmp_dir, "GET", f"{candidate}/users/me", timeout_sec=10)
+                if code in (200, 401, 403):
+                    selected = candidate
+                    break
+            except Exception:
+                pass
+        base = selected or base_backend
+    split = urlsplit(base)
+    base_origin = f"{split.scheme}://{split.netloc}"
     print(f"[e2e] Base API: {base}")
     print(f"[e2e] Async queue expected: {expect_async}")
 
-    code, _ = curl_json(tmp_dir, "GET", f"{base}/users/me")
+    code, _ = curl_json(tmp_dir, "GET", f"{base}/users/me", timeout_sec=args.request_timeout_sec)
     assert_status("unauth /users/me", code, 401)
     print("[e2e] Unauthorized guard OK")
 
@@ -340,7 +373,7 @@ def main() -> int:
     token2 = issue_jwt(jwt_secret, user2_id, email2, full_name2, jwt_expires_min)
     print(f"[e2e] Seeded secondary user id={user2_id}")
 
-    code, me = curl_json(tmp_dir, "GET", f"{base}/users/me", token=token)
+    code, me = curl_json(tmp_dir, "GET", f"{base}/users/me", token=token, timeout_sec=args.request_timeout_sec)
     assert_status("auth /users/me", code, 200)
     if int(me.get("id", -1)) != user_id:
         raise AssertionError("Authenticated /users/me returned unexpected user id")
@@ -384,17 +417,29 @@ def main() -> int:
         raise AssertionError("Video output download failed")
     print(f"[e2e] Video processing OK (jobId={video_job_id}, statuses={video_observed})")
 
-    code, _ = curl_json(tmp_dir, "GET", f"{base}/media/jobs/{image_job_id}/status", token=token2)
+    code, _ = curl_json(
+        tmp_dir,
+        "GET",
+        f"{base}/media/jobs/{image_job_id}/status",
+        token=token2,
+        timeout_sec=args.request_timeout_sec,
+    )
     if code not in (403, 404):
         raise AssertionError(f"IDOR status guard failed. expected 403/404, got {code}")
-    code = curl_download(tmp_dir, f"{base_origin}/api/v1/media/jobs/{image_job_id}/download", token2, tmp_dir / "e2e-idor.bin")
+    code = curl_download(
+        tmp_dir,
+        f"{base_origin}/api/v1/media/jobs/{image_job_id}/download",
+        token2,
+        tmp_dir / "e2e-idor.bin",
+        timeout_sec=args.request_timeout_sec,
+    )
     if code not in (403, 404):
         raise AssertionError(f"IDOR download guard failed. expected 403/404, got {code}")
     print("[e2e] IDOR guards OK")
 
-    code, _ = curl_json(tmp_dir, "POST", f"{base}/auth/logout", token=token2)
+    code, _ = curl_json(tmp_dir, "POST", f"{base}/auth/logout", token=token2, timeout_sec=args.request_timeout_sec)
     assert_status("logout secondary user", code, 200)
-    code, _ = curl_json(tmp_dir, "GET", f"{base}/users/me", token=token2)
+    code, _ = curl_json(tmp_dir, "GET", f"{base}/users/me", token=token2, timeout_sec=args.request_timeout_sec)
     if code != 401:
         raise AssertionError(f"Logout token revocation failed, expected 401 got {code}")
     run_psql_exec(pg_user, pg_db, f"DELETE FROM users WHERE id = {user2_id};")

@@ -52,7 +52,7 @@ function Compose-Args([hashtable]$EnvMap, [string]$RepoRoot) {
 function Wait-HttpUp([string]$Url, [string]$Contains, [int]$Retries = 60, [int]$SleepSec = 2) {
     for ($i = 1; $i -le $Retries; $i++) {
         try {
-            $resp = curl.exe -sS $Url
+            $resp = curl.exe -sS --connect-timeout 5 --max-time 10 $Url
             if ($resp -and $resp.Contains($Contains)) {
                 return $true
             }

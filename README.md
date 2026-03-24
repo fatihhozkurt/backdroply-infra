@@ -102,6 +102,33 @@ Direct benchmark command:
 pwsh ./infra/scripts/load-benchmark.ps1 -EnvFile .env.production
 ```
 
+`benchmark_probe.py` now measures **terminal job latency** (submit -> `SUCCESS`/`FAILED`) by polling `/media/jobs/{id}/status`; it no longer reports submit-only latency.
+
+Custom sample files (for real-world manual benchmark):
+
+```powershell
+python .\infra\scripts\benchmark_probe.py `
+  --env-file .\.env.production.local `
+  --tmp-dir .\tmp-integration `
+  --video-file C:\Users\fatih\Desktop\vidu-video-3191802828768854.mp4 `
+  --image-requests 0 --video-requests 1 --concurrency 1 --user-pool 1 `
+  --request-timeout-sec 500 `
+  --output-json .\tmp-integration\reports\bench-user-video.json
+```
+
+Ground-truth alpha quality gate (optional):
+
+```powershell
+python .\infra\scripts\benchmark_probe.py `
+  --env-file .\.env.production.local `
+  --tmp-dir .\tmp-integration `
+  --video-file C:\path\input.mp4 `
+  --video-gt-alpha-video C:\path\input_gt_alpha.mp4 `
+  --image-requests 0 --video-requests 1 --concurrency 1 --user-pool 1 `
+  --video-gt-eval-limit 1 `
+  --output-json .\tmp-integration\reports\bench-gt.json
+```
+
 If `pwsh` is not installed:
 
 ```powershell
